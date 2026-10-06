@@ -47,7 +47,7 @@ def collect(timeout=45):
     with tempfile.TemporaryDirectory(prefix='nts-probe-') as directory:
         root = Path(directory)
         sock = root / 'command.sock'
-        config = ('server time.cloudflare.com iburst nts\n'
+        config = ('server time.cloudflare.com iburst nts minpoll 0 maxpoll 0\n'
                   'port 0\ncmdport 0\n'
                   f'bindcmdaddress {sock}\npidfile {root / "pid"}\n')
         (root / 'chrony.conf').write_text(config)
@@ -56,6 +56,8 @@ def collect(timeout=45):
         process = subprocess.Popen(['chronyd', '-x', '-U', '-u', pwd.getpwuid(os.getuid()).pw_name, '-d', '-f', str(root / 'chrony.conf')],
                                    stdout=log, stderr=subprocess.STDOUT)
         snapshots = []
+        qualification = None
+        capture = None
         try:
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline and process.poll() is None:
@@ -70,13 +72,25 @@ def collect(timeout=45):
                     except subprocess.TimeoutExpired:
                         snapshot[command] = ''
                         snapshot[command + '_returncode'] = -1
+                snapshot['captured_wall_ns'] = time.time_ns()
+                snapshot['captured_mono_ns'] = time.monotonic_ns()
                 try:
                     snapshot['assessment'] = assess(snapshot['ntpdata'], snapshot['authdata'])
                 except (ValueError, IndexError):
                     snapshot['assessment'] = {'authenticated_provider_response_observed': False}
                 snapshots.append(snapshot)
-                if snapshot['assessment']['authenticated_provider_response_observed']:
-                    break
+                from clock_adapter import adapt, qualify_pair, rejection_checks
+                try:
+                    sample, details = adapt(snapshot)
+                    snapshot['adapter_details'] = details
+                    if capture is None:
+                        capture = snapshot
+                    elif details['good_rx'] > capture['adapter_details']['good_rx']:
+                        qualification = qualify_pair(capture, snapshot, time.time_ns(), time.monotonic_ns())
+                        qualification['rejection_checks'] = rejection_checks(sample)
+                        break
+                except (ValueError, KeyError, IndexError, PermissionError) as exc:
+                    snapshot['adapter_denial'] = str(exc)
                 time.sleep(min(1, max(0, deadline - time.monotonic())))
         finally:
             if process.poll() is None:
@@ -90,10 +104,10 @@ def collect(timeout=45):
             daemon_log = log.read()
             log.close()
         observed = bool(snapshots and snapshots[-1]['assessment']['authenticated_provider_response_observed'])
-        return dict(base, status='AUTHENTICATED_DIAGNOSTIC_OBSERVED' if observed else 'PROBE_UNAVAILABLE',
+        return dict(base, status='NONLIVE_CLOCK_PAIR_QUALIFIED' if qualification else ('AUTHENTICATED_DIAGNOSTIC_OBSERVED' if observed else 'PROBE_UNAVAILABLE'),
                     snapshots=snapshots, daemon_log=daemon_log,
                     configuration_sha256=hashlib.sha256(config.encode()).hexdigest(),
-                    qualification='OPEN_REQUIRES_FRESHNESS_UNCERTAINTY_AND_END_TO_END_REVIEW')
+                    clock_qualification=qualification, qualification='APPLICATION_INTEGRATION_AND_INDEPENDENT_REVIEW_OPEN')
 
 
 if __name__ == '__main__':
