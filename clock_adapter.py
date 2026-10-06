@@ -84,12 +84,19 @@ def adapt(snapshot):
     # Conservative host-clock error bound from chrony: |offset| + root distance.
     uncertainty = abs(offset) + dispersion + (delay + 1) // 2 + elapsed + growth
     ref = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
-    sample = ClockEvidence('time.cloudflare.com', snapshot['captured_wall_ns'] + offset,
-                           snapshot['captured_wall_ns'], snapshot['captured_mono_ns'], uncertainty,
+    # Backdate gate capture to the measurement, including display granularity.
+    # Reading cached chrony state must not refresh the underlying sample's age.
+    measured_age = max(0, age) + 1_000_000_000
+    sample_wall = snapshot['captured_wall_ns'] - measured_age
+    sample_mono = snapshot['captured_mono_ns'] - measured_age
+    if sample_mono < 0:
+        raise ValueError('MONOTONIC_MEASUREMENT_TIME_INVALID')
+    sample = ClockEvidence('time.cloudflare.com', sample_wall + offset,
+                           sample_wall, sample_mono, uncertainty,
                            True, 'HEALTHY', 'UTC', leaps[t['Leap status']], 'sha256:' + ref,
                            True, 'OWNED_CHRONY_NTS_DAEMON')
     return sample, {'address': address, 'good_rx': good, 'reference_time_ns': ref_ns,
-                    'measurement_age_upper_ns': max(0, age), 'uncertainty_ns': uncertainty,
+                    'measurement_age_upper_ns': measured_age, 'uncertainty_ns': uncertainty,
                     'trust_boundary': 'owned sole-source chronyd with certificate verification enabled',
                     'production_competence': False}
 

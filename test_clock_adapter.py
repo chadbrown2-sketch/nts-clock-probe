@@ -45,6 +45,16 @@ class AdapterTests(unittest.TestCase):
                 s[field] = s[field].replace(old,new)
                 with self.assertRaises((ValueError, KeyError)): adapt(s)
 
+    def test_cache_read_does_not_refresh_age(self):
+        s=fixture()
+        s['captured_wall_ns']+=4_500_000_000
+        s['captured_mono_ns']+=4_500_000_000
+        s['mono_ns']+=4_500_000_000
+        sample,_=adapt(s)
+        gate=ClockGate(provider='time.cloudflare.com',appointment={'scope':'NONLIVE_TEST_ONLY'})
+        with self.assertRaises(PermissionError):
+            gate.validate(sample,wall_ns=s['captured_wall_ns'],mono_ns=s['captured_mono_ns'])
+
     def test_replayed_packet_counter(self):
         s=fixture()
         with self.assertRaises(ValueError): qualify_pair(s,copy.deepcopy(s),s['captured_wall_ns'],s['captured_mono_ns'])
