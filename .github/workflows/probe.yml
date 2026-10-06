@@ -1,0 +1,42 @@
+name: Bounded NTS connectivity probe
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: nts-clock-probe
+  cancel-in-progress: true
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Extract chrony binaries without installing a system service
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/chrony-package"
+          cd "$RUNNER_TEMP/chrony-package"
+          sudo apt-get update -qq
+          apt-get download chrony
+          dpkg-deb -x chrony_*.deb extracted
+          printf '%s\n' "$RUNNER_TEMP/chrony-package/extracted/usr/sbin" >> "$GITHUB_PATH"
+          printf '%s\n' "$RUNNER_TEMP/chrony-package/extracted/usr/bin" >> "$GITHUB_PATH"
+      - name: Collect authenticated provider diagnostics without changing system clock
+        shell: bash
+        run: |
+          set -euo pipefail
+          chronyd -v
+          python3 probe_chrony.py --timeout 45 --output "$RUNNER_TEMP/nts-result.json"
+          cat "$RUNNER_TEMP/nts-result.json"
+          python3 - "$RUNNER_TEMP/nts-result.json" <<'PY'
+          import json, sys
+          result = json.load(open(sys.argv[1]))
+          if result['status'] != 'AUTHENTICATED_DIAGNOSTIC_OBSERVED':
+              sys.exit('Authenticated provider response not observed; qualification remains open')
+          PY
