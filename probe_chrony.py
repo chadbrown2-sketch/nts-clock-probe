@@ -83,6 +83,15 @@ def collect(timeout=45):
                 try:
                     sample, details = adapt(snapshot)
                     snapshot['adapter_details'] = details
+                    from clock_gate import ClockGate
+                    gate = ClockGate(provider='time.cloudflare.com', appointment={'scope': 'NONLIVE_TEST_ONLY'})
+                    gate.validate(sample, wall_ns=time.time_ns(), mono_ns=time.monotonic_ns())
+                    if capture is not None:
+                        previous, _ = adapt(capture)
+                        try:
+                            gate.validate(previous, wall_ns=time.time_ns(), mono_ns=time.monotonic_ns())
+                        except PermissionError:
+                            capture = None
                     if capture is None:
                         capture = snapshot
                     elif details['good_rx'] > capture['adapter_details']['good_rx']:
